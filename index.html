@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reprodutor com Filtro Passa-Baixa</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #d32f2f;
+            margin-bottom: 30px;
+        }
+        .controls {
+            margin: 20px 0;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            padding: 12px 20px;
+            margin: 10px 10px;
+            cursor: pointer;
+            background-color: #d32f2f;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #b71c1c;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        input[type="range"] {
+            width: 80%;
+            margin: 20px 0;
+            height: 8px;
+            -webkit-appearance: none;
+            background: #ddd;
+            border-radius: 5px;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #d32f2f;
+            border-radius: 50%;
+        }
+        .visualizer {
+            width: 100%;
+            height: 150px;
+            background-color: #333;
+            margin-top: 30px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Reprodutor de Áudio com Visualização</h1>
+
+    <div class="controls">
+        <button id="playBtn">Reproduzir</button>
+        <button id="pauseBtn" disabled>Pausar</button>
+        <button id="stopBtn" disabled>Parar</button>
+        <button id="toggleFilterBtn">Ativar Filtro Passa-Baixa</button>
+
+        <div style="margin-top: 20px;">
+            <label for="volumeControl">Volume:</label>
+            <input type="range" id="volumeControl" min="0" max="1" step="0.01" value="0.7">
+        </div>
+    </div>
+
+    <canvas class="visualizer" id="visualizer"></canvas>
+
+    <script>
+        const playBtn = document.getElementById('playBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const toggleFilterBtn = document.getElementById('toggleFilterBtn');
+        const volumeControl = document.getElementById('volumeControl');
+        const visualizer = document.getElementById('visualizer');
+
+        let audioContext = null;
+        let audioBuffer = null;
+        let audioSource = null;
+        let analyser = null;
+        let dataArray = null;
+        let gainNode = null;
+        let lowpassFilter = null;
+
+        let isPlaying = false;
+        let isFilterActive = false;
+
+        const audioUrl = 'Sirano e Sirino - Ô Mulher Você é Linda.mp3'; // Substitua pelo caminho correto
+
+        function setupAnalyser() {
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            const bufferLength = analyser.frequencyBinCount;
+            dataArray = new Uint8Array(bufferLength);
+        }
+
+        function setupLowpassFilter() {
+            lowpassFilter = audioContext.createBiquadFilter();
+            lowpassFilter.type = 'lowpass';
+            lowpassFilter.frequency.setValueAtTime(1000, audioContext.currentTime); // Frequência de corte
+        }
+
+        function drawVisualizer() {
+            if (!isPlaying) return;
+
+            requestAnimationFrame(drawVisualizer);
+
+            analyser.getByteFrequencyData(dataArray);
+
+            const width = visualizer.width;
+            const height = visualizer.height;
+            const barWidth = width / dataArray.length;
+            const canvasContext = visualizer.getContext('2d');
+            canvasContext.clearRect(0, 0, width, height);
+
+            for (let i = 0; i < dataArray.length; i++) {
+                const barHeight = dataArray[i] / 255 * height;
+                const x = i * barWidth;
+                const y = height - barHeight;
+
+                const gradient = canvasContext.createLinearGradient(0, height, 0, y);
+                gradient.addColorStop(0, '#d32f2f');
+                gradient.addColorStop(1, '#ffcdd2');
+
+                canvasContext.fillStyle = gradient;
+                canvasContext.fillRect(x, y, barWidth - 1, barHeight);
+            }
+        }
+
+        function loadAudio() {
+            fetch(audioUrl)
+                .then(response => response.arrayBuffer())
+                .then(arrayBuffer => audioContext.decodeAudioData(arrayBuffer))
+                .then(buffer => {
+                    audioBuffer = buffer;
+                    playAudio();
+                })
+                .catch(err => {
+                    console.error('Erro ao carregar o áudio:', err);
+                    alert('Erro ao carregar a música. Verifique se o arquivo está no local correto.');
+                });
+        }
+
+        function playAudio() {
+            if (!audioBuffer || isPlaying || !audioContext) return;
+
+            if (audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+
+            audioSource = audioContext.createBufferSource();
+            audioSource.buffer = audioBuffer;
+
+            gainNode = audioContext.createGain();
+            gainNode.gain.value = volumeControl.value;
+
+            setupAnalyser();
+            setupLowpassFilter();
+
+            if (isFilterActive) {
+                audioSource.connect(analyser);
+                analyser.connect(lowpassFilter);
+                lowpassFilter.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+            } else {
+                audioSource.connect(analyser);
+                analyser.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+            }
+
+            visualizer.width = visualizer.offsetWidth;
+            visualizer.height = visualizer.offsetHeight;
+
+            audioSource.start(0);
+            isPlaying = true;
+            pauseBtn.disabled = false;
+            stopBtn.disabled = false;
+            playBtn.disabled = true;
+
+            drawVisualizer();
+
+            audioSource.onended = function () {
+                isPlaying = false;
+                playBtn.disabled = false;
+                pauseBtn.disabled = true;
+                stopBtn.disabled = true;
+            };
+        }
+
+        playBtn.addEventListener('click', function () {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                loadAudio();
+            } else {
+                playAudio();
+            }
+        });
+
+        pauseBtn.addEventListener('click', function () {
+            if (!isPlaying || !audioContext) return;
+
+            audioContext.suspend().then(() => {
+                isPlaying = false;
+                pauseBtn.disabled = true;
+                playBtn.disabled = false;
+            });
+        });
+
+        stopBtn.addEventListener('click', function () {
+            if (!audioSource) return;
+
+            audioSource.stop();
+            isPlaying = false;
+            playBtn.disabled = false;
+            pauseBtn.disabled = true;
+            stopBtn.disabled = true;
+        });
+
+        volumeControl.addEventListener('input', function () {
+            if (gainNode) {
+                gainNode.gain.value = this.value;
+            }
+        });
+
+        toggleFilterBtn.addEventListener('click', function () {
+            isFilterActive = !isFilterActive;
+            toggleFilterBtn.textContent = isFilterActive ? 'Desativar Filtro Passa-Baixa' : 'Ativar Filtro Passa-Baixa';
+
+            if (isPlaying) {
+                stopBtn.click(); // Para o som atual
+                setTimeout(() => playBtn.click(), 100); // Reinicia com novo filtro
+            }
+        });
+    </script>
+</body>
+</html>
