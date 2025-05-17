@@ -99,27 +99,63 @@
         let dataArray = null;
         let gainNode = null;
         let lowpassFilter = null;
-
+        
+        // Variáveis de controle
         let isPlaying = false;
+        let isPaused = false;
         let isFilterActive = false;
+        let currentPlaybackTime = 0;
+        let playbackStartTime = 0;
 
-        const audioUrl = 'Sirano e Sirino - Ô Mulher Você é Linda.mp3'; // Substitua pelo caminho correto
+        const audioUrl = 'Sirano e Sirino - Ô Mulher Você é Linda.mp3';
 
-        function setupAnalyser() {
+        function setupAudioNodes() {
+            // Limpa nós anteriores se existirem
+            if (audioSource) {
+                audioSource.disconnect();
+            }
+            if (gainNode) {
+                gainNode.disconnect();
+            }
+            if (lowpassFilter) {
+                lowpassFilter.disconnect();
+            }
+
+            // Cria novos nós
+            audioSource = audioContext.createBufferSource();
+            audioSource.buffer = audioBuffer;
+            
+            gainNode = audioContext.createGain();
+            gainNode.gain.value = volumeControl.value;
+            
             analyser = audioContext.createAnalyser();
             analyser.fftSize = 256;
-            const bufferLength = analyser.frequencyBinCount;
-            dataArray = new Uint8Array(bufferLength);
-        }
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+            
+            if (isFilterActive) {
+                lowpassFilter = audioContext.createBiquadFilter();
+                lowpassFilter.type = 'lowpass';
+                lowpassFilter.frequency.value = 1000;
+            }
 
-        function setupLowpassFilter() {
-            lowpassFilter = audioContext.createBiquadFilter();
-            lowpassFilter.type = 'lowpass';
-            lowpassFilter.frequency.setValueAtTime(1000, audioContext.currentTime); // Frequência de corte
+            // Conecta os nós
+            if (isFilterActive) {
+                audioSource.connect(analyser);
+                analyser.connect(lowpassFilter);
+                lowpassFilter.connect(gainNode);
+            } else {
+                audioSource.connect(analyser);
+                analyser.connect(gainNode);
+            }
+            gainNode.connect(audioContext.destination);
+
+            audioSource.onended = () => {
+                stopAudio();
+            };
         }
 
         function drawVisualizer() {
-            if (!isPlaying) return;
+            if (!isPlaying && !isPaused) return;
 
             requestAnimationFrame(drawVisualizer);
 
@@ -159,94 +195,121 @@
                 });
         }
 
-        function playAudio() {
-            if (!audioBuffer || isPlaying || !audioContext) return;
-
-            if (audioContext.state === 'suspended') {
-                audioContext.resume();
+        function stopAudio() {
+            if (audioSource) {
+                try {
+                    audioSource.stop();
+                } catch (e) {
+                    console.log("Audio already stopped");
+                }
+                audioSource.disconnect();
+                audioSource = null;
             }
-
-            audioSource = audioContext.createBufferSource();
-            audioSource.buffer = audioBuffer;
-
-            gainNode = audioContext.createGain();
-            gainNode.gain.value = volumeControl.value;
-
-            setupAnalyser();
-            setupLowpassFilter();
-
-            if (isFilterActive) {
-                audioSource.connect(analyser);
-                analyser.connect(lowpassFilter);
-                lowpassFilter.connect(gainNode);
-                gainNode.connect(audioContext.destination);
-            } else {
-                audioSource.connect(analyser);
-                analyser.connect(gainNode);
-                gainNode.connect(audioContext.destination);
-            }
-
-            visualizer.width = visualizer.offsetWidth;
-            visualizer.height = visualizer.offsetHeight;
-
-            audioSource.start(0);
-            isPlaying = true;
-            pauseBtn.disabled = false;
-            stopBtn.disabled = false;
-            playBtn.disabled = true;
-
-            drawVisualizer();
-
-            audioSource.onended = function () {
-                isPlaying = false;
-                playBtn.disabled = false;
-                pauseBtn.disabled = true;
-                stopBtn.disabled = true;
-            };
+            
+            isPlaying = false;
+            isPaused = false;
+            currentPlaybackTime = 0;
+            updateButtonStates();
         }
 
-        playBtn.addEventListener('click', function () {
-            if (!audioContext) {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                loadAudio();
-            } else {
-                playAudio();
-            }
-        });
-
-        pauseBtn.addEventListener('click', function () {
-            if (!isPlaying || !audioContext) return;
-
+        function pauseAudio() {
+            if (!isPlaying) return;
+            
+            // Calcula o tempo decorrido
+            currentPlaybackTime = audioContext.currentTime - playbackStartTime;
+            
+            // Suspende o contexto de áudio
             audioContext.suspend().then(() => {
                 isPlaying = false;
-                pauseBtn.disabled = true;
-                playBtn.disabled = false;
+                isPaused = true;
+                updateButtonStates();
             });
+        }
+
+        function playAudio() {
+            if (isPlaying) return;
+            
+            if (!audioBuffer) {
+                loadAudio();
+                return;
+            }
+
+            if (isPaused) {
+                // Se estava pausado, apenas retoma
+                audioContext.resume().then(() => {
+                    isPlaying = true;
+                    isPaused = false;
+                    playbackStartTime = audioContext.currentTime - currentPlaybackTime;
+                    updateButtonStates();
+                });
+                return;
+            }
+
+            // Configura todos os nós de áudio
+            setupAudioNodes();
+
+            // Inicia a reprodução do ponto atual
+            playbackStartTime = audioContext.currentTime - currentPlaybackTime;
+            audioSource.start(0, currentPlaybackTime);
+            
+            isPlaying = true;
+            isPaused = false;
+            updateButtonStates();
+
+            // Atualiza visualizador
+            visualizer.width = visualizer.offsetWidth;
+            visualizer.height = visualizer.offsetHeight;
+            drawVisualizer();
+        }
+
+        function updateButtonStates() {
+            playBtn.disabled = isPlaying;
+            pauseBtn.disabled = !isPlaying;
+            stopBtn.disabled = !isPlaying && !isPaused;
+        }
+
+        // Event Listeners
+        playBtn.addEventListener('click', () => {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            playAudio();
         });
 
-        stopBtn.addEventListener('click', function () {
-            if (!audioSource) return;
+        pauseBtn.addEventListener('click', pauseAudio);
 
-            audioSource.stop();
-            isPlaying = false;
-            playBtn.disabled = false;
-            pauseBtn.disabled = true;
-            stopBtn.disabled = true;
+        stopBtn.addEventListener('click', () => {
+            stopAudio();
+            currentPlaybackTime = 0; // Reseta para o início
         });
 
-        volumeControl.addEventListener('input', function () {
+        volumeControl.addEventListener('input', () => {
             if (gainNode) {
-                gainNode.gain.value = this.value;
+                gainNode.gain.value = volumeControl.value;
             }
         });
 
-        toggleFilterBtn.addEventListener('click', function () {
+        toggleFilterBtn.addEventListener('click', () => {
             isFilterActive = !isFilterActive;
-            toggleFilterBtn.textContent = isFilterActive ? 'Desativar Filtro Passa-Baixa' : 'Ativar Filtro Passa-Baixa';
+            toggleFilterBtn.textContent = isFilterActive 
+                ? 'Desativar Filtro Passa-Baixa' 
+                : 'Ativar Filtro Passa-Baixa';
 
-            if (isPlaying) {
-                stopBtn.click(); // Para o som atual
-                setTimeout(() => playBtn.click(), 100); // Reinicia com novo filtro
+            if (isPlaying || isPaused) {
+                const wasPlaying = isPlaying;
+                const currentTime = isPlaying 
+                    ? audioContext.currentTime - playbackStartTime 
+                    : currentPlaybackTime;
+                
+                stopAudio();
+                currentPlaybackTime = currentTime;
+                
+                setTimeout(() => {
+                    if (wasPlaying) {
+                        playAudio();
+                    }
+                }, 50);
             }
         });
     </script>
